@@ -1,6 +1,6 @@
 var debug = require('debug')('node-database-connectors:node-database-connectors');
-var db = require('mysql');
-const utils=require("./utils.js");
+var Redshift = require('node-redshift');
+
 //connect
 var fieldIdentifier_left = '`',
   fieldIdentifier_right = '`';
@@ -15,15 +15,15 @@ exports.connect = function(json, cb) {
 
 function connectPool(json, cb) {
   var numConnections = json.connectionLimit || 0;
-  var pool = db.createPool({
-    acquireTimeout: json.acquireTimeout || 2 * 1000,
-    connectionLimit: numConnections,
+  var pool = new Redshift({
+    // acquireTimeout: json.acquireTimeout || 2 * 1000,
+    // connectionLimit: numConnections,
     host: json.host,
     port: json.port,
     user: json.user,
     database: json.database,
     password: json.password,
-    multipleStatements: json.connectionLimit === false ? false : true
+    // multipleStatements: json.connectionLimit === false ? false : true
   });
   if (cb)
     cb(null, pool);
@@ -49,28 +49,32 @@ function connectPool(json, cb) {
 }
 
 function connect(json, cb) {
-  var connection = db.createConnection({
+  var connection = new Redshift({
     host: json.host,
     port: json.port,
     user: json.user,
     database: json.database,
     password: json.password,
-    multipleStatements: json.connectionLimit === false ? false : true
+    // multipleStatements: json.connectionLimit === false ? false : true
   });
+  // var redshiftConnection =  new Redshift(connection);
   // console.log("CONNECTION CREATED...", connection.state, connection.threadId);
-  connection.connect(function(err) {
-    if (err) {
-      debug('error-A');
-      debug(['c.connect', err]);
-    } else {
-      connection.on('error', function(e) {
-        debug('error-B');
-        debug(['error', e]);
-      });
-    }
-    if (cb)
-      cb(err, connection);
-  });
+  // connection.connect(function(err) {
+  //   console.log(err)
+  //   if (err) {
+  //     debug('error-A');
+  //     debug(['c.connect', err]);
+  //   } else {
+  //     cb(null,connection)
+  //     // connection.on('error', function(e) {
+  //     //   debug('error-B');
+  //     //   debug(['error', e]);
+  //     // });
+  //   }
+  //   if (cb)
+  //     cb(err, connection);
+  // });
+  cb(null,connection)
   return connection;
 }
 
@@ -80,7 +84,7 @@ exports.disconnect = function() {
 }
 
 function disconnect(connection) {
-  connection.end();
+  connection.close();
 }
 
 //prepare query
@@ -222,7 +226,33 @@ function createDeleteQuery(json) {
 }
 
 function validateJson(json) {
-  return utils.validateJson(json);
+  if (!json.hasOwnProperty('insert') && !json.hasOwnProperty('update') && !json.hasOwnProperty('delete') && !json.hasOwnProperty('select')) {
+    return 'J2Q_INVALID_JSON';
+  }
+  if (json.hasOwnProperty('filter') && json.hasOwnProperty('insert')) {
+    return 'J2Q_INVALID_INSERTJOSN';
+  }
+
+  if (json.hasOwnProperty('limit') || json.hasOwnProperty('having') || json.hasOwnProperty('groupby')) {
+    if (!json.hasOwnProperty('select')) {
+      return 'J2Q_ONLYSELECT_JSON';
+    }
+  }
+
+  if (json.hasOwnProperty('insert') && (json.hasOwnProperty('update') || json.hasOwnProperty('delete') || json.hasOwnProperty('select'))) {
+    return 'J2Q_INSERT_UPDATE_MERGED';
+  }
+  if (json.hasOwnProperty('udpate') && (json.hasOwnProperty('insert') || json.hasOwnProperty('delete') || json.hasOwnProperty('select'))) {
+    return 'J2Q_INSERT_UPDATE_MERGED';
+  }
+  if (json.hasOwnProperty('delete') && (json.hasOwnProperty('update') || json.hasOwnProperty('insert') || json.hasOwnProperty('select'))) {
+    return 'J2Q_INSERT_UPDATE_MERGED';
+  }
+  if (json.hasOwnProperty('select') && (json.hasOwnProperty('update') || json.hasOwnProperty('delete') || json.hasOwnProperty('insert'))) {
+    return 'J2Q_INSERT_UPDATE_MERGED';
+  } else {
+    return '';
+  }
 }
 
 function prepareQuery(json) {
@@ -299,7 +329,7 @@ function createSelect(arr, selectAll) {
             var strOperatorSign = '';
             strOperatorSign = operatorSign(operator, value);
             if (strOperatorSign.indexOf('IN') > -1) { //IN condition has different format
-              selectText += ' WHEN ' + table + '.' + field + ' ' + strOperatorSign + ' ("' + value.join('","') + '") THEN ' + outVal;
+              selectText += ' WHEN ' + table + '.' + field + ' ' + strOperatorSign + ' (\'' + value.join("','") + '\') THEN ' + outVal;
             } else {
               selectText += ' WHEN ' + table + '.' + field + ' ' + strOperatorSign + ' "' + value + '" THEN ' + outVal;
             }
@@ -626,8 +656,7 @@ function createSingleCondition(obj) {
   if (operator != undefined) {
     var sign = operatorSign(operator, value);
     if (sign.indexOf('IN') > -1) { //IN condition has different format
-      var tempValue = value.map(d => d != null ? d.toString().replace(/\'/ig, "\\\'") : d).join("','");
-      conditiontext += " " + sign + " ('" + tempValue + "')";
+      conditiontext += ' ' + sign + ' (\'' + value.join("','") + '\')';
     } else {
       var tempValue = '';
       if (typeof value === 'undefined' || value == null) {
@@ -639,7 +668,7 @@ function createSingleCondition(obj) {
           tempValue = encloseField(rTable) + '.' + encloseField(value.field);
         }
       } else {
-        tempValue = '\'' + replaceSingleQuote(value) + '\'';
+        tempValue = '\'' + value + '\'';
       }
       conditiontext += ' ' + sign + ' ' + tempValue;
     }

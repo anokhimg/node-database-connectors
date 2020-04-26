@@ -1,6 +1,7 @@
 var debug = require('debug')('node-database-connectors:node-database-connectors');
 var db = require('cassandra-driver');
 var PlainTextAuthProvider = db.auth.PlainTextAuthProvider;
+const utils=require("./utils.js");
 //connect
 var fieldIdentifier_left = '`',
   fieldIdentifier_right = '`';
@@ -221,33 +222,7 @@ function createDeleteQuery(json) {
 }
 
 function validateJson(json) {
-  if (!json.hasOwnProperty('insert') && !json.hasOwnProperty('update') && !json.hasOwnProperty('delete') && !json.hasOwnProperty('select')) {
-    return 'J2Q_INVALID_JSON';
-  }
-  if (json.hasOwnProperty('filter') && json.hasOwnProperty('insert')) {
-    return 'J2Q_INVALID_INSERTJOSN';
-  }
-
-  if (json.hasOwnProperty('limit') || json.hasOwnProperty('having') || json.hasOwnProperty('groupby')) {
-    if (!json.hasOwnProperty('select')) {
-      return 'J2Q_ONLYSELECT_JSON';
-    }
-  }
-
-  if (json.hasOwnProperty('insert') && (json.hasOwnProperty('update') || json.hasOwnProperty('delete') || json.hasOwnProperty('select'))) {
-    return 'J2Q_INSERT_UPDATE_MERGED';
-  }
-  if (json.hasOwnProperty('udpate') && (json.hasOwnProperty('insert') || json.hasOwnProperty('delete') || json.hasOwnProperty('select'))) {
-    return 'J2Q_INSERT_UPDATE_MERGED';
-  }
-  if (json.hasOwnProperty('delete') && (json.hasOwnProperty('update') || json.hasOwnProperty('insert') || json.hasOwnProperty('select'))) {
-    return 'J2Q_INSERT_UPDATE_MERGED';
-  }
-  if (json.hasOwnProperty('select') && (json.hasOwnProperty('update') || json.hasOwnProperty('delete') || json.hasOwnProperty('insert'))) {
-    return 'J2Q_INSERT_UPDATE_MERGED';
-  } else {
-    return '';
-  }
+  return utils.validateJson(json);
 }
 
 function prepareQuery(json) {
@@ -321,9 +296,9 @@ function createSelect(arr, selectAll) {
             var strOperatorSign = '';
             strOperatorSign = operatorSign(operator, value);
             if (strOperatorSign.indexOf('IN') > -1) { //IN condition has different format
-              selectText += ' WHEN ' + field + ' ' + strOperatorSign + ' ("' + value.join('","') + '") THEN ' + outVal;
+              selectText += ' WHEN ' + field + ' ' + strOperatorSign + ' (\'' + value.join('\',\'') + '\') THEN ' + outVal;
             } else {
-              selectText += ' WHEN ' + field + ' ' + strOperatorSign + ' "' + value + '" THEN ' + outVal;
+              selectText += ' WHEN ' + field + ' ' + strOperatorSign + ' \'' + value + '\' THEN ' + outVal;
             }
           }
           if (defaultCase.hasOwnProperty('value')) {
@@ -415,10 +390,14 @@ function createInsert(arr) {
         var encloseFieldFlag = (obj.encloseField != undefined) ? obj.encloseField : true;
         var field = encloseField(obj.field, encloseFieldFlag)
         var table = encloseField(obj.table ? obj.table : '');
-        var fValue = obj.fValue ? obj.fValue : '';
-        fValue = (replaceSingleQuote(fValue));
+        var fValue = obj.fValue;// ? obj.fValue : '';
+        fValue = (fValue == null ? fValue : replaceSingleQuote(fValue));
         tempJson.fieldArr.push(field);
-        tempJson.valueArr.push('\'' + fValue + '\'');
+        if(fValue != null) {
+          tempJson.valueArr.push('\'' + fValue + '\'');
+        } else {
+          tempJson.valueArr.push("null");
+        }
       }
     }
     return tempJson;
@@ -445,10 +424,18 @@ function createUpdate(arr) {
       var encloseFieldFlag = (obj.encloseField != undefined) ? obj.encloseField : true;
       var field = encloseField(obj.field, encloseFieldFlag)
       var table = encloseField(obj.table ? obj.table : '');
-      var fValue = obj.fValue ? obj.fValue : '';
-      fValue = (replaceSingleQuote(fValue));
+      var fValue = obj.fValue;// ? obj.fValue : '';
+      fValue = (fValue == null ? fValue : replaceSingleQuote(fValue));
       var selectText = '';
-      selectText = table + '.' + field + '=' + '\'' + fValue + '\'';
+      if(fValue != null) {
+        selectText = table + '.' + field + '=' + '\'' + fValue + '\'';
+      } else {
+        if(encloseFieldFlag==true){
+          selectText = table + '.' + field + '=null';
+        }else{
+          selectText =field;
+        }
+      }
       tempArr.push(selectText);
     }
     return tempArr;
@@ -523,7 +510,7 @@ function operatorSign(operator, value) {
   if (operator.toString().toLowerCase() == 'eq') {
     if (Object.prototype.toString.call(value) === '[object Array]') {
       sign = 'IN';
-    } else if (typeof value === 'undefined') {
+    } else if (typeof value === 'undefined' || value == null) {
       sign = 'IS';
     } else if (typeof value == 'string') {
       sign = '=';
@@ -533,7 +520,7 @@ function operatorSign(operator, value) {
   } else if (operator.toString().toLowerCase() == 'noteq') {
     if (Object.prototype.toString.call(value) === '[object Array]') {
       sign = 'NOT IN';
-    } else if (typeof value === 'undefined') {
+    } else if (typeof value === 'undefined' || value == null) {
       sign = 'IS NOT';
     } else if (typeof value == 'string') {
       sign = '<>';
@@ -587,13 +574,13 @@ function createSingleCondition(obj) {
     var sign = operatorSign(operator, value);
     if (sign.indexOf('IN') > -1) { //IN condition has different format
       if (typeof value[0] == 'string') {
-        conditiontext += ' ' + sign + ' ("' + value.join('","') + '")';
+        conditiontext += ' ' + sign + ' (\'' + value.join('\',\'') + '\')';
       } else {
         conditiontext += ' ' + sign + ' (' + value.join(',') + ')';
       }
     } else {
       var tempValue = '';
-      if (typeof value === 'undefined') {
+      if (typeof value === 'undefined' || value == null) {
         tempValue = 'null';
       } else if (typeof value === 'object') {
         sign = operatorSign(operator, '');
